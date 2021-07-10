@@ -29,7 +29,6 @@ function Install-SCCM {
     #>
 
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
-    [cmdletbinding()]
     param(
         [string]
         $DomainContoller = "DC1",
@@ -63,7 +62,7 @@ function Install-SCCM {
             foreach ($image in $imagesFound) {
                 if ($image.Name -like "*configuration_manager*") {
                     if ($PSCmdlet.ShouldProcess("Mounting Configuration Manager ISO")) {
-                        Mount-DiskImage -ImagePath  (Join-Path -Path $IsoLocation -ChildPath $image) -Access ReadOnly -StorageType ISO -PassThru -ErrorAction SilentlyContinue
+                        $mounted = Mount-DiskImage -ImagePath  (Join-Path -Path $IsoLocation -ChildPath $image) -Access ReadOnly -StorageType ISO -PassThru -ErrorAction SilentlyContinue
                         $volume = Get-DiskImage $mounted.ImagePath | Get-Volume
                         Write-Host -ForegroundColor Green "ISO mounted as $($volume.Driveletter) drive"
                         break
