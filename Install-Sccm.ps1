@@ -17,13 +17,15 @@ function Install-SCCM {
 
         .PARAMETER LoggingPath
             Path to PowerShell transcript logging
+            
+        .PARAMETER IsoLocation
+            Location to ISO folder where images are contained
 
         .EXAMPLE
-            PS C:\> Install-SCCM -DomainController DC1 -SCCMServer SCCM
+            PS C:\> Install-SCCM
 
         .NOTES
             Installation notes: https://systemcenterdudes.com/complete-sccm-installation-guide-and-configuration/
-            As of right now you need to manually install SQL Server and SCCM so you can define your SQL instance as well as Primary Site and transport options
     #>
 
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
@@ -36,7 +38,10 @@ function Install-SCCM {
         $SCCMServer = "SCCM",
 
         [string]
-        $LoggingPath = "C:\Logs\SCCMInstall.Log"
+        $LoggingPath = "C:\Logs\SCCMInstall.Log",
+
+        [string]
+        $IsoLocation = "c:\Software\ConfigMgr\"
     )
 
     begin {
@@ -51,10 +56,37 @@ function Install-SCCM {
     process {
         Write-Host -ForegroundColor Green "Logging started"
         Start-Transcript -Path $LoggingPath -Append -IncludeInvocationHeader
+        $imagesFound = Get-ChildItem -Path $IsoLocation -Filter '*.iso'
+
+        try {
+            Write-Host -ForegroundColor Green "Attempting to mount Configuration Manager ISO"
+            foreach ($image in $imagesFound) {
+                if ($image.Name -like "*configuration_manager*") {
+                    if ($PSCmdlet.ShouldProcess("Mounting Configuration Manager ISO")) {
+                        Mount-DiskImage -ImagePath  (Join-Path -Path $IsoLocation -ChildPath $image) -Access ReadOnly -StorageType ISO -PassThru -ErrorAction SilentlyContinue
+                        $volume = Get-DiskImage $mounted.ImagePath | Get-Volume
+                        Write-Host -ForegroundColor Green "ISO mounted as $($volume.Driveletter) drive"
+                        break
+                    }
+                    else {
+                        Write-Host -ForegroundColor Red "Failure: ISO image failed mount!"
+                        return
+                    }
+                }
+                else {
+                    Write-Host -ForegroundColor Red "No Configuration Manager image found"
+                    return
+                }
+            }
+        }
+        catch {
+            Write-Host -ForegroundColor Red "Error $_"
+            return
+        }
 
         Write-Verbose "Checking for ActiveDirectory module"
         if (Get-Module -Name ActiveDirectory -ListAvailable) { Write-Verbose "ActiveDirectory module found!" }
-        else {
+        else { 
             Write-Verbose "Installing ActiveDirectory module"
             Add-WindowsFeature -Name "RSAT-AD-PowerShell" –IncludeAllSubFeature
             Import-Module -Name ActiveDirectory
@@ -68,7 +100,7 @@ function Install-SCCM {
             else {
                 Write-Host -ForegroundColor Red "Your account is not a member of the Schema Admins group. Adding to group membership"
                 if ($PSCmdlet.ShouldProcess("Add member to Schema Admins group")) {
-                    Add-ADGroupMember -Identity 'Schema Admins' -Members ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name -split '\\')[1] -Verbose -PassThru -ErrorAction Stop
+                    Add-ADGroupMember -Identity 'Schema Admins' -Members ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name -split '\\')[1] -Verbose -PassThru -ErrorAction Stop 
                     Write-Host -ForegroundColor Green "Your account is now part of the Schema Admins group"
                 }
                 else {
@@ -82,13 +114,7 @@ function Install-SCCM {
         }
 
         Write-Host -ForegroundColor Green "Extending schema for SCCM"
-        try {
-            Start-Process -Filepath ".\SMSSETUP\BIN\X64\extadsch.exe" -Wait    
-        }
-        catch {
-            Write-Host -ForegroundColor Red "Error $_"
-            return
-        }
+        Start-Process -Filepath "$($volume.driverletter)\SMSSETUP\BIN\X64\extadsch.exe"  -Wait
 
         Write-Host -ForegroundColor Green "Checking server versions"
         $serverVersion = Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption
@@ -108,7 +134,7 @@ function Install-SCCM {
                 Write-Host -ForegroundColor Red "SCCM System Management Container not found - Creating"
 
                 if ($PSCmdlet.ShouldProcess("SCCM System Management Container")) {
-                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=Microsoft Exchange System Objects,DC=$Domain,DC=com" -Server $DomainContoller -PassThru -ErrorAction Stop
+                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=Microsoft Exchange System Objects,DC=$Domain,DC=com" -Server $DomainContoller -PassThru -ErrorAction Stop 
                     Write-Host -ForegroundColor Red "Failure: SCCM System Management Container not created"
                     return
                 }
@@ -152,7 +178,7 @@ function Install-SCCM {
             
             if ($PSCmdlet.ShouldProcess("Creating new managed SCCM-SQLService account")) {
                 New-ADServiceAccount -Name 'SCCM-SQLService' -DNSHostName $DomainContoller -Enabled $True -PassThru -ErrorAction SilentlyContinue -ErrorVariable AlreadyExists
-                Write-Verbose "SCCM-SQLService created!"
+                Write-Verbose "SCCM-SQLService created!" 
             }
             else { $AlreadyExists.ErrorRecord.CategoryInfo.TargetName }
         }
@@ -193,7 +219,7 @@ function Install-SCCM {
     
         try {
             Write-Host -ForegroundColor Green "Installing Windows Features"
-            $windowsFeatures = @('Web-Windows-Auth', 'Web-ISAPI-Ext', 'Web-Metabase', 'Web-WMI', 'BITS', 'RDC', 'NET-Framework-Features', 'Web-Asp-Net', 'Web-Asp-Net45', 'NET-HTTP-Activation', 'NET-Non-HTTP-Activ')
+            $windowsFeatures = @('Web-Windows-Auth', 'Web-ISAPI-Ext' , 'Web-Metabase' , 'Web-WMI' , 'BITS', 'RDC', 'NET-Framework-Features', 'Web-Asp-Net', 'Web-Asp-Net45', 'NET-HTTP-Activation', 'NET-Non-HTTP-Activ')
             foreach ($feature in $windowsFeatures) { Install-WindowsFeature -Name $feature -ErrorAction Stop }
         }
         catch {
@@ -202,7 +228,7 @@ function Install-SCCM {
         }
         
         try {
-            Write-Host -ForegroundColor Green "Download and installing SQL Report Viewer, ADK for Windows 10 and SSMS"
+            Write-Host -ForegroundColor Green "Installing SQL Report Viewer, ADK for Windows 10 and SSMS"
             $urls = @(
                 @("SQLServerReportingServices.exe", "https://download.microsoft.com/download/1/a/a/1aaa9177-3578-4931-b8f3-373b24f63342/SQLServerReportingServices.exe", "/quiet /norestart /IAcceptLicenseTerms /Edition=Dev"),
                 @("adksetup", "https://download.microsoft.com/download/9/A/E/9AE69DD5-BA93-44E0-864E-180F5E700AB4/adk/adksetup.exe?ocid=tia-235208000", "/quiet /installpath c:\ADK /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment OptionId.UserStateMigrationTool"),
@@ -212,30 +238,28 @@ function Install-SCCM {
             foreach ($url in $urls) {
                 $outpath = "$env:TEMP\$($url[0])"
                 if ($PSCmdlet.ShouldProcess("Installing Software")) {
-                    Invoke-WebRequest -Uri $url[1] -OutFile $outpath
+                    Invoke-WebRequest -Uri $url[1] -OutFile $outpath 
                     Write-Host -ForegroundColor Green "Downloading and installing $($url[0])"
                     $cmdArguements = $url[2]
                     Start-Process -Filepath $outpath -ArgumentList $cmdArguements -Wait 
                 }
             }
-
             Write-Host -ForegroundColor Cyan "You can now kick off the SCCM installation!"
         }
         catch {
             Write-Host -ForegroundColor Red "Error $_"
             return
         }
+
+        Write-Host -ForegroundColor Green "Open 'https://systemcenterdudes.com/complete-sccm-installation-guide-and-configuration/' and skip down to 'NEW SCCM INSTALLATION'"
+        Write-Verbose "Restoring ConfirmPreference"
+        $ConfirmPreference = $OldConfirmPreference
+        Write-Verbose "Dismounting the $($volume.DriveLetter) drive"
+        Stop-Transcript
+        Write-Host -ForegroundColor Green "Logging stopped. Logs can be found at: $LoggingPath"
     }
 
     end {
-        Write-Host -ForegroundColor Green "Open 'https://systemcenterdudes.com/complete-sccm-installation-guide-and-configuration/' and skip down to 'NEW SCCM INSTALLATION'"
-        Write-Host -ForegroundColor Green "Logging stopped. Logs can be found at: $LoggingPath"
-        Start-Transcript -Path $LoggingPath -Append -IncludeInvocationHeader
-        
-        Write-Verbose "Stopping Logging. Log written to $($LoggingPath)"
-        Stop-Transcript
-        Write-Verbose "Restoring ConfirmPreference"
-        $ConfirmPreference = $OldConfirmPreference
         Write-Host -ForegroundColor Green "SCCM install process - Finished!"
     }
 }
