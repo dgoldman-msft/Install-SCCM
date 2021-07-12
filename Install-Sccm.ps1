@@ -20,6 +20,15 @@ function Install-SCCM {
             
         .PARAMETER IsoLocation
             Location to ISO folder where images are contained
+        
+        .PARAMETER SkipSoftwareInstall
+            Skips installing SQL Report Viewer, ADK for Windows 10 and SSMS
+
+        .PARAMETER SkipWindowsFeatures
+            Skips installing windows features
+
+        .PARAMETER SkipFirewallSetup
+            Skips configuring firewall ports
 
         .EXAMPLE
             PS C:\> Install-SCCM
@@ -40,10 +49,21 @@ function Install-SCCM {
         $LoggingPath = "C:\Logs\SCCMInstall.Log",
 
         [string]
-        $IsoLocation = "c:\Software\ConfigMgr\"
+        $IsoLocation = "c:\Software\ConfigMgr\",
+
+        [switch]
+        $SkipSoftwareInstall,
+
+        [switch]
+        $SkipWindowsFeatures,
+
+        [switch]
+        $SkipFirewallSetup
     )
 
     begin {
+        $parameters = $PSBoundParameters
+        $domain = $env:USERDOMAIN
         Write-Host -ForegroundColor Green "SCCM install process - Started"
 
         if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
@@ -112,8 +132,29 @@ function Install-SCCM {
             return
         }
 
-        Write-Host -ForegroundColor Green "Extending schema for SCCM"
-        Start-Process -Filepath "$($volume.driverletter)\SMSSETUP\BIN\X64\extadsch.exe"  -Wait
+        Write-Host -ForegroundColor Green "Checking to see if the schema has been extended for SCCM"
+        if (Test-path -Path "$env:SystemDrive\ExtADSch.log") {
+            $content = Get-Content -Path "$env:SystemDrive\ExtADSch.log" -Raw 
+            foreach ($line in $content) {
+                if ($line -eq "Successfully extended the Active Directory schema.") {
+                    Write-Host -ForegroundColor Green "Extending has already been extended for SCCM"
+                    break
+                }
+            }
+        }
+        else {
+            Write-Host -ForegroundColor Green "Extending schema for SCCM"
+            try {
+                Set-Location -Path "$($volume.driverletter)"
+                Start-Process -Filepath ".\SMSSETUP\BIN\X64\extadsch.exe"  -Wait
+                Write-Host -ForegroundColor Green "SCCM Schmea extended"
+                Set-Location -Path $env:SystemDrive
+            }
+            catch {
+                Write-Host -ForegroundColor Red "Error $_"
+                return
+            }
+        }
 
         Write-Host -ForegroundColor Green "Checking server versions"
         $serverVersion = Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty Caption
@@ -129,27 +170,26 @@ function Install-SCCM {
 
         try {
             Write-Host -ForegroundColor Green "Checking for SCCM System Management Container in the Active Directory"
-            if (-NOT (Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$env:USERDOMAIN,DC=com")) {
-                Write-Host -ForegroundColor Red "SCCM System Management Container not found - Creating"
-
-                if ($PSCmdlet.ShouldProcess("SCCM System Management Container")) {
-                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=Microsoft Exchange System Objects,DC=$Domain,DC=com" -Server $DomainContoller -PassThru -ErrorAction Stop 
-                    Write-Host -ForegroundColor Red "Failure: SCCM System Management Container not created"
-                    return
-                }
-                else { Write-Host -ForegroundColor Green "SCCM System Management Container created!" }
-            }
-            else { Write-Host -ForegroundColor Green "SCCM System Management Container alread existed" }
+            Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$domain,DC=com"
+            Write-Host -ForegroundColor Green "SCCM System Management Container found!"
         }
         catch {
-            Write-Host -ForegroundColor Red "Error $_"
-            return
+            try {
+                if ($PSCmdlet.ShouldProcess("SCCM System Management Container")) {
+                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$Domain,DC=com" -Server $DomainContoller -PassThru -ErrorAction Stop 
+                    Write-Host -ForegroundColor Green "SCCM System Management container created"
+                }
+            }
+            catch {
+                Write-Host -ForegroundColor Red "Failure: SCCM System Management container not created"
+                return
+            }
         }
 
         try {
             Write-Host -ForegroundColor Green "Setting SCCM System Management Container permissions"
             if ($PSCmdlet.ShouldProcess("Setting SCCM system mManagement container permissions")) {
-                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$env:USERDOMAIN,DC=com" -ErrorAction Stop
+                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$domain,DC=com" -ErrorAction Stop
                 $computer = Get-ADComputer $SCCMServer -ErrorAction Stop
                 $sid = [System.Security.Principal.SecurityIdentifier] $computer.SID
                 $identity = [System.Security.Principal.IdentityReference] $SID
@@ -158,7 +198,7 @@ function Install-SCCM {
                 $inheritanceType = [System.DirectoryServices.ActiveDirectorySecurityInheritance] "All"
                 $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule $identity, $adRights, $type, $inheritanceType
                 $acl.AddAccessRule($ace)
-                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$env:USERDOMAIN,DC=com" -ErrorAction -Stop -Passthru) {
+                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$domain,DC=com" -ErrorAction Stop -Passthru) {
                     Write-Host -ForegroundColor Green "SCCM System Management Container permissions set!"
                 }
                 else {
@@ -176,39 +216,53 @@ function Install-SCCM {
             Write-Host -ForegroundColor Green "Creating SCCM accounts and groups"
             
             if ($PSCmdlet.ShouldProcess("Creating new managed SCCM-SQLService account")) {
-                New-ADServiceAccount -Name 'SCCM-SQLService' -DNSHostName $DomainContoller -Enabled $True -PassThru -ErrorAction SilentlyContinue -ErrorVariable AlreadyExists
-                Write-Verbose "SCCM-SQLService created!" 
+                if (New-ADServiceAccount -Name 'SCCM-SQLService' -DNSHostName $DomainContoller -Enabled $True -PassThru) {
+                    Write-Verbose "SCCM-SQLService created!" 
+                }
             }
-            else { $AlreadyExists.ErrorRecord.CategoryInfo.TargetName }
         }
         catch {
-            Write-Host -ForegroundColor Red "Error $_"
-            return
+            if ($_.Exception.Message -eq "The specified account already exists") {
+                Write-Host -ForegroundColor Yellow "SCCM-SQLService found!" 
+                
+            }
+            elseif ($_.Exception.Message -eq "The specified account already exists") {
+                Write-Host -ForegroundColor Red "KdsRootKey not found. Adding it" 
+                try { 
+                    Add-KdsRootKey -EffectiveTime ((get-date).addhours(-10)) -ErrorAction Stop 
+                }
+                catch { 
+                    Write-Host -ForegroundColor Red "KdsRootKey not found. Adding it" 
+                    return
+                }
+            }
         }
 
         try {
-            Write-Host -ForegroundColor Green "Setting necessary Firewall ports"
-            if ($PSCmdlet.ShouldProcess("Setting Firewall Port Settings")) {
-                Write-Verbose "Enabling SQLServer default instance port 1433"
-                netsh advfirewall firewall add rule name="SQL Server" dir=in action=allow protocol=TCP localport=1433
-                Write-Verbose "Dedicated Admin Connection port 1434"
-                netsh advfirewall firewall add rule name="SQL Admin Connection" dir=in action=allow protocol=TCP localport=1434
-                Write-Verbose "conventional SQL Server Service Broker port 4022"
-                netsh advfirewall firewall add rule name="SQL Service Broker" dir=in action=allow protocol=TCP localport=4022
-                Write-Verbose "Transact-SQL Debugger/RPC port 135"
-                netsh advfirewall firewall add rule name="SQL Debugger/RPC" dir=in action=allow protocol=TCP localport=135
-                Write-Verbose "Enabling SSAS Default Instance port 2383"
-                netsh advfirewall firewall add rule name="Analysis Services" dir=in action=allow protocol=TCP localport=2383
-                Write-Verbose "Enabling SQL Server Browser Service port 2382"
-                netsh advfirewall firewall add rule name="SQL Browser" dir=in action=allow protocol=TCP localport=2382
-                Write-Verbose "Enabling HTTP port 80"
-                netsh advfirewall firewall add rule name="HTTP" dir=in action=allow protocol=TCP localport=80
-                Write-Verbose "Enabling SSL port 443"
-                netsh advfirewall firewall add rule name="SSL" dir=in action=allow protocol=TCP localport=443
-                Write-Verbose "Enabling port for SQL Server Browser Services Browse Button"
-                netsh advfirewall firewall add rule name="SQL Browser" dir=in action=allow protocol=TCP localport=1434
-                Write-Verbose "Allowing Ping command"
-                netsh advfirewall firewall add rule name="ICMP Allow incoming V4 echo request" protocol=icmpv4:8, any dir=in action=allow
+            if (-NOT ($parameters.ContainsKey("SkipFirewallSetup"))) {
+                Write-Host -ForegroundColor Green "Setting necessary Firewall ports"
+                if ($PSCmdlet.ShouldProcess("Setting Firewall Port Settings")) {
+                    Write-Verbose "Enabling SQLServer default instance port 1433"
+                    $null = netsh advfirewall firewall add rule name="SQL Server" dir=in action=allow protocol=TCP localport=1433
+                    Write-Verbose "Dedicated Admin Connection port 1434"
+                    $null = netsh advfirewall firewall add rule name="SQL Admin Connection" dir=in action=allow protocol=TCP localport=1434
+                    Write-Verbose "conventional SQL Server Service Broker port 4022"
+                    $null = netsh advfirewall firewall add rule name="SQL Service Broker" dir=in action=allow protocol=TCP localport=4022
+                    Write-Verbose "Transact-SQL Debugger/RPC port 135"
+                    $null = netsh advfirewall firewall add rule name="SQL Debugger/RPC" dir=in action=allow protocol=TCP localport=135
+                    Write-Verbose "Enabling SSAS Default Instance port 2383"
+                    $null = netsh advfirewall firewall add rule name="Analysis Services" dir=in action=allow protocol=TCP localport=2383
+                    Write-Verbose "Enabling SQL Server Browser Service port 2382"
+                    $null = netsh advfirewall firewall add rule name="SQL Browser" dir=in action=allow protocol=TCP localport=2382
+                    Write-Verbose "Enabling HTTP port 80"
+                    $null = netsh advfirewall firewall add rule name="HTTP" dir=in action=allow protocol=TCP localport=80
+                    Write-Verbose "Enabling SSL port 443"
+                    $null = netsh advfirewall firewall add rule name="SSL" dir=in action=allow protocol=TCP localport=443
+                    Write-Verbose "Enabling port for SQL Server Browser Services Browse Button"
+                    $null = netsh advfirewall firewall add rule name="SQL Browser" dir=in action=allow protocol=TCP localport=1434
+                    Write-Verbose "Allowing Ping command"
+                    $null = netsh advfirewall firewall add rule name="ICMP Allow incoming V4 echo request" protocol=icmpv4:8, any dir=in action=allow
+                }
             }
         }
         catch {
@@ -217,9 +271,11 @@ function Install-SCCM {
         }
     
         try {
-            Write-Host -ForegroundColor Green "Installing Windows Features"
-            $windowsFeatures = @('Web-Windows-Auth', 'Web-ISAPI-Ext' , 'Web-Metabase' , 'Web-WMI' , 'BITS', 'RDC', 'NET-Framework-Features', 'Web-Asp-Net', 'Web-Asp-Net45', 'NET-HTTP-Activation', 'NET-Non-HTTP-Activ')
-            foreach ($feature in $windowsFeatures) { Install-WindowsFeature -Name $feature -ErrorAction Stop }
+            if (-NOT ($parameters.ContainsKey("SkipWindowsFeatures"))) {
+                Write-Host -ForegroundColor Green "Installing Windows Features"
+                $windowsFeatures = @('Web-Windows-Auth', 'Web-ISAPI-Ext' , 'Web-Metabase' , 'Web-WMI' , 'BITS', 'RDC', 'NET-Framework-Features', 'Web-Asp-Net', 'Web-Asp-Net45', 'NET-HTTP-Activation', 'NET-Non-HTTP-Activ')
+                foreach ($feature in $windowsFeatures) { Install-WindowsFeature -Name $feature -ErrorAction Stop }
+            }
         }
         catch {
             Write-Host -ForegroundColor Red "Error $_"
@@ -227,23 +283,25 @@ function Install-SCCM {
         }
         
         try {
-            Write-Host -ForegroundColor Green "Installing SQL Report Viewer, ADK for Windows 10 and SSMS"
-            $urls = @(
-                @("SQLServerReportingServices.exe", "https://download.microsoft.com/download/1/a/a/1aaa9177-3578-4931-b8f3-373b24f63342/SQLServerReportingServices.exe", "/quiet /norestart /IAcceptLicenseTerms /Edition=Dev"),
-                @("adksetup", "https://download.microsoft.com/download/9/A/E/9AE69DD5-BA93-44E0-864E-180F5E700AB4/adk/adksetup.exe?ocid=tia-235208000", "/quiet /installpath c:\ADK /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment OptionId.UserStateMigrationTool"),
-                @("SSMS-Setup-ENU.exe", "https://download.microsoft.com/download/4/6/8/4681f3b2-f327-4d3d-8617-264b20685be0/SSMS-Setup-ENU.exe", "/install /quiet /norestart")
-            )
-            
-            foreach ($url in $urls) {
-                $outpath = "$env:TEMP\$($url[0])"
-                if ($PSCmdlet.ShouldProcess("Installing Software")) {
-                    Invoke-WebRequest -Uri $url[1] -OutFile $outpath 
-                    Write-Host -ForegroundColor Green "Downloading and installing $($url[0])"
-                    $cmdArguements = $url[2]
-                    Start-Process -Filepath $outpath -ArgumentList $cmdArguements -Wait 
+            if (-NOT ($parameters.ContainsKey("SkipSoftwareInstall"))) {
+                Write-Host -ForegroundColor Green "Installing SQL Report Viewer, ADK for Windows 10 and SSMS"
+                $urls = @(
+                    @("SQLServerReportingServices.exe", "https://download.microsoft.com/download/1/a/a/1aaa9177-3578-4931-b8f3-373b24f63342/SQLServerReportingServices.exe", "/quiet /norestart /IAcceptLicenseTerms /Edition=Dev"),
+                    @("adksetup.exe", "https://download.microsoft.com/download/9/A/E/9AE69DD5-BA93-44E0-864E-180F5E700AB4/adk/adksetup.exe?ocid=tia-235208000", "/quiet /installpath c:\ADK /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment OptionId.UserStateMigrationTool"),
+                    @("SSMS-Setup-ENU.exe", "https://download.microsoft.com/download/4/6/8/4681f3b2-f327-4d3d-8617-264b20685be0/SSMS-Setup-ENU.exe", "/install /quiet /norestart")
+                )
+                
+                foreach ($url in $urls) {
+                    $outpath = "$env:TEMP\$($url[0])"
+                    if ($PSCmdlet.ShouldProcess("Installing Software")) {
+                        Invoke-WebRequest -Uri $url[1] -OutFile $outpath 
+                        Write-Host -ForegroundColor Green "Downloading and installing $($url[0])"
+                        $cmdArguements = $url[2]
+                        Start-Process -Filepath $outpath -ArgumentList $cmdArguements -Wait 
+                    }
                 }
+                Write-Host -ForegroundColor Cyan "You can now kick off the SCCM installation!"
             }
-            Write-Host -ForegroundColor Cyan "You can now kick off the SCCM installation!"
         }
         catch {
             Write-Host -ForegroundColor Red "Error $_"
