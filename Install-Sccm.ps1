@@ -40,7 +40,7 @@ function Install-SCCM {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
         [string]
-        $DomainContoller = "DC1",
+        $DomainController = "DC1",
 
         [string]
         $SCCMServer = "SCCM",
