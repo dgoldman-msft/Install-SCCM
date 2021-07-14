@@ -62,7 +62,6 @@ function Install-SCCM {
     )
 
     begin {
-      
         Write-Host -ForegroundColor Green "SCCM install process - Started"
 
         if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
@@ -73,7 +72,7 @@ function Install-SCCM {
 
     process {
         $script:parameters = $PSBoundParameters
-        $script:domain =  $env:USERDNSDOMAIN -split '\W'
+        $script:domain = $env:USERDNSDOMAIN -split '\W'
         
         Write-Host -ForegroundColor Green "Logging started"
         Start-Transcript -Path $LoggingPath -Append -IncludeInvocationHeader
@@ -193,7 +192,7 @@ function Install-SCCM {
         try {
             Write-Host -ForegroundColor Green "Setting SCCM System Management Container permissions"
             if ($PSCmdlet.ShouldProcess("Setting SCCM system mManagement container permissions")) {
-                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$($script:domain[0]),$($script:domain[1])" -ErrorAction Stop
+                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$($script:domain[0]),DC=$($script:domain[1])" -ErrorAction Stop
                 $computer = Get-ADComputer $SCCMServer -ErrorAction Stop
                 $sid = [System.Security.Principal.SecurityIdentifier] $computer.SID
                 $identity = [System.Security.Principal.IdentityReference] $SID
