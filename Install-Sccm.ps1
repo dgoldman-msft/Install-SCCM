@@ -107,7 +107,7 @@ function Install-SCCM {
 
         Write-Verbose "Checking for ActiveDirectory module"
         if (Get-Module -Name ActiveDirectory -ListAvailable) { Write-Verbose "ActiveDirectory module found!" }
-        else { 
+        else {
             Write-Verbose "Installing ActiveDirectory module"
             Add-WindowsFeature -Name "RSAT-AD-PowerShell" –IncludeAllSubFeature
             Import-Module -Name ActiveDirectory
@@ -145,13 +145,13 @@ function Install-SCCM {
                 Start-Process -Filepath ".\SMSSETUP\BIN\X64\extadsch.exe" -Wait
                 Set-Location -Path $env:SystemDrive
 
-                if (Test-SchemaExtension) { 
-                    Write-Host -ForegroundColor Green "SCCM Schmea extended!" 
-                } 
+                if (Test-SchemaExtension) {
+                    Write-Host -ForegroundColor Green "SCCM Schmea extended!"
+                }
                 else {
                     Write-Host -ForegroundColor Red "SCCM has not been Schmea extended. Please check the SCCM logs for more information."
                     return
-                } 
+                }
             }
             catch {
                 Write-Host -ForegroundColor Red "Error $_"
@@ -179,7 +179,7 @@ function Install-SCCM {
         catch {
             try {
                 if ($PSCmdlet.ShouldProcess("SCCM System Management Container")) {
-                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$($script:domain[0]),DC=$($script:domain[1])" -Server $DomainController -PassThru -ErrorAction Stop 
+                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$($script:domain[0]),DC=$($script:domain[1])" -Server $DomainController -PassThru -ErrorAction Stop
                     Write-Host -ForegroundColor Green "SCCM System Management container created"
                 }
             }
@@ -220,22 +220,23 @@ function Install-SCCM {
             
             if ($PSCmdlet.ShouldProcess("Creating new managed SCCM-SQLService account")) {
                 if (New-ADServiceAccount -Name 'SCCM-SQLService' -DNSHostName $DomainController -Enabled $True -PassThru) {
-                    Write-Verbose "SCCM-SQLService created!" 
+                    Write-Verbose "SCCM-SQLService created!"
                 }
             }
         }
         catch {
-            if ($_.Exception.Message -eq "The specified account already exists") {
-                Write-Host -ForegroundColor Yellow "SCCM-SQLService found!" 
-                
+            if ($_.Exception -eq "The specified account already exists") {
+                Write-Host -ForegroundColor Yellow "SCCM-SQLService found!"
             }
-            elseif ($_.Exception.Message -eq "The specified account already exists") {
-                Write-Host -ForegroundColor Red "KdsRootKey not found. Adding it" 
-                try { 
-                    Add-KdsRootKey -EffectiveTime ((get-date).addhours(-10)) -ErrorAction Stop 
+            elseif ($_.Exception -eq "Key does not exist") {
+                try {
+                    Add-KdsRootKey -EffectiveTime ((get-date).addhours(-10)) -ErrorAction Stop
+                    Write-Host -ForegroundColor Red "KdsRootKey not found. Adding it"
+                    Write-Host -ForegroundColor Yellow "SCCM-SQLService found!"
+                    Set-ADServiceAccount -Identity 'SCCM-SQLService' -PrincipalsAllowedToRetrieveManagedPassword "$env:COMPUTERNAME$"
                 }
-                catch { 
-                    Write-Host -ForegroundColor Red "KdsRootKey not found. Adding it" 
+                catch {
+                    Write-Host -ForegroundColor Red "KdsRootKey not found. Adding it"
                     return
                 }
             }
@@ -272,7 +273,7 @@ function Install-SCCM {
             Write-Host -ForegroundColor Red "Error $_"
             return
         }
-    
+
         try {
             if (-NOT ($parameters.ContainsKey("SkipWindowsFeatures"))) {
                 Write-Host -ForegroundColor Green "Installing Windows Features"
@@ -284,25 +285,27 @@ function Install-SCCM {
             Write-Host -ForegroundColor Red "Error $_"
             return
         }
-        
+
         try {
             if (-NOT ($parameters.ContainsKey("SkipSoftwareInstall"))) {
                 Write-Host -ForegroundColor Green "Installing SQL Report Viewer, ADK for Windows 10 and SSMS"
                 $urls = @(
                     @("SQLServerReportingServices.exe", "https://download.microsoft.com/download/1/a/a/1aaa9177-3578-4931-b8f3-373b24f63342/SQLServerReportingServices.exe", "/quiet /norestart /IAcceptLicenseTerms /Edition=Dev"),
-                    @("adksetup.exe", "https://download.microsoft.com/download/9/A/E/9AE69DD5-BA93-44E0-864E-180F5E700AB4/adk/adksetup.exe?ocid=tia-235208000", "/quiet /installpath c:\ADK /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment OptionId.UserStateMigrationTool"),
+                    @("adksetup.exe", "https://download.microsoft.com/download/8/6/c/86c218f3-4349-4aa5-beba-d05e48bbc286/adk/adksetup.exe", "/quiet /installpath c:\ADK /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment OptionId.UserStateMigrationTool"),
+                    @("adkwinpesetup.exe", "https://download.microsoft.com/download/3/c/2/3c2b23b2-96a0-452c-b9fd-6df72266e335/adkwinpeaddons/adkwinpesetup.exe", "/quiet /installpath c:\ADK /features +"),
                     @("SSMS-Setup-ENU.exe", "https://download.microsoft.com/download/4/6/8/4681f3b2-f327-4d3d-8617-264b20685be0/SSMS-Setup-ENU.exe", "/install /quiet /norestart")
                 )
-                
+
                 foreach ($url in $urls) {
                     $outpath = "$env:TEMP\$($url[0])"
                     if ($PSCmdlet.ShouldProcess("Installing Software")) {
-                        Invoke-WebRequest -Uri $url[1] -OutFile $outpath 
+                        Invoke-WebRequest -Uri $url[1] -OutFile $outpath
                         Write-Host -ForegroundColor Green "Downloading and installing $($url[0])"
                         $cmdArguements = $url[2]
-                        Start-Process -Filepath $outpath -ArgumentList $cmdArguements -Wait 
+                        Start-Process -Filepath $outpath -ArgumentList $cmdArguements -Wait
                     }
                 }
+
                 Write-Host -ForegroundColor Cyan "You can now kick off the SCCM installation!"
             }
         }
@@ -333,7 +336,7 @@ function Test-SchemaExtension {
             Test to see if the schema has already been extended for SCCM
 
         .EXAMPLE
-            c:\ PS> Test-SchemaExtension
+            PS C:\> Test-SchemaExtension
 
         .NOTES
             Internal method
