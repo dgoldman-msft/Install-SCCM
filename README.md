@@ -4,10 +4,14 @@ Helper function to install everything for Sccm (minus SQL and SCCM)
 
 ## Getting Started
 
-1. Install SQL Server Enterprise on the server
-2. Download an ISO of Configuration Managmner
-3. Dot source script into local PowerShell session: . .\Install-Sccm.ps1
-4. Run Install-SCCM -DomainController DC1 -SCCMServer SCCM -IsoLocation 'c:\ISOs\'
+1. Run Set-ExecutionPolicy -ExecutionPolicy Bypass or Unrestricted
+2. Install SQL Server Enterprise on the server
+3. Download an ISO of Configuration Managmner
+4. Click on the Install-SCCM.ps1
+5. Click on 'Raw' and copy the script - Downloading from Github is corrupting the script on line 280
+6. Save script locally as Install-Sccm.ps1
+7. Dot source script into local PowerShell session: . .\Install-Sccm.ps1
+8. Run Install-SCCM -DomainController DC1 -SCCMServer SCCM -IsoLocation 'c:\ISOs\'
 
 ## Notes
 
