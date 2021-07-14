@@ -312,7 +312,7 @@ function Install-SCCM {
             return
         }
 
-        Write-Host -ForegroundColor Green "Open 'https://systemcenterdudes.com/complete-sccm-installation-guide-and-configuration/' and skip down to 'NEW SCCM INSTALLATION'"
+        Write-Host -ForegroundColor Green "Open https://systemcenterdudes.com/complete-sccm-installation-guide-and-configuration/ and skip down to NEW SCCM INSTALLATION"
         Write-Verbose "Restoring ConfirmPreference"
         $ConfirmPreference = $OldConfirmPreference
         Write-Verbose "Dismounting the $($volume.DriveLetter) drive"
