@@ -62,8 +62,7 @@ function Install-SCCM {
     )
 
     begin {
-        $parameters = $PSBoundParameters
-        $domain = $env:USERDOMAIN
+      
         Write-Host -ForegroundColor Green "SCCM install process - Started"
 
         if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
@@ -73,6 +72,9 @@ function Install-SCCM {
     }
 
     process {
+        $script:parameters = $PSBoundParameters
+        $script:domain = $env:USERDOMAIN
+        
         Write-Host -ForegroundColor Green "Logging started"
         Start-Transcript -Path $LoggingPath -Append -IncludeInvocationHeader
         $imagesFound = Get-ChildItem -Path $IsoLocation -Filter '*.iso'
@@ -84,6 +86,7 @@ function Install-SCCM {
                     if ($PSCmdlet.ShouldProcess("Mounting Configuration Manager ISO")) {
                         $mounted = Mount-DiskImage -ImagePath  (Join-Path -Path $IsoLocation -ChildPath $image) -Access ReadOnly -StorageType ISO -PassThru -ErrorAction SilentlyContinue
                         $volume = Get-DiskImage $mounted.ImagePath | Get-Volume
+                        $script:driveLetter = $volume.DriveLetter + ":"
                         Write-Host -ForegroundColor Green "ISO mounted as $($volume.Driveletter) drive"
                         break
                     }
@@ -133,22 +136,23 @@ function Install-SCCM {
         }
 
         Write-Host -ForegroundColor Green "Checking to see if the schema has been extended for SCCM"
-        if (Test-path -Path "$env:SystemDrive\ExtADSch.log") {
-            $content = Get-Content -Path "$env:SystemDrive\ExtADSch.log" -Raw 
-            foreach ($line in $content) {
-                if ($line -eq "Successfully extended the Active Directory schema.") {
-                    Write-Host -ForegroundColor Green "Extending has already been extended for SCCM"
-                    break
-                }
-            }
+        if (Test-SchemaExtension) {
+            Write-Host -ForegroundColor Green "Extending has already been extended for SCCM"
         }
         else {
             Write-Host -ForegroundColor Green "Extending schema for SCCM"
             try {
-                Set-Location -Path "$($volume.driverletter)"
-                Start-Process -Filepath ".\SMSSETUP\BIN\X64\extadsch.exe"  -Wait
-                Write-Host -ForegroundColor Green "SCCM Schmea extended"
+                Set-Location -Path $script:driveLetter
+                Start-Process -Filepath ".\SMSSETUP\BIN\X64\extadsch.exe" -Wait
                 Set-Location -Path $env:SystemDrive
+
+                if (Test-SchemaExtension) { 
+                    Write-Host -ForegroundColor Green "SCCM Schmea extended!" 
+                } 
+                else {
+                    Write-Host -ForegroundColor Red "SCCM has not been Schmea extended. Please check the SCCM logs for more information."
+                    return
+                } 
             }
             catch {
                 Write-Host -ForegroundColor Red "Error $_"
@@ -170,13 +174,13 @@ function Install-SCCM {
 
         try {
             Write-Host -ForegroundColor Green "Checking for SCCM System Management Container in the Active Directory"
-            Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$domain,DC=com"
+            Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$script:domain,DC=com"
             Write-Host -ForegroundColor Green "SCCM System Management Container found!"
         }
         catch {
             try {
                 if ($PSCmdlet.ShouldProcess("SCCM System Management Container")) {
-                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$Domain,DC=com" -Server $DomainContoller -PassThru -ErrorAction Stop 
+                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$script:domain,DC=com" -Server $DomainContoller -PassThru -ErrorAction Stop 
                     Write-Host -ForegroundColor Green "SCCM System Management container created"
                 }
             }
@@ -189,7 +193,7 @@ function Install-SCCM {
         try {
             Write-Host -ForegroundColor Green "Setting SCCM System Management Container permissions"
             if ($PSCmdlet.ShouldProcess("Setting SCCM system mManagement container permissions")) {
-                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$domain,DC=com" -ErrorAction Stop
+                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$script:domain,DC=com" -ErrorAction Stop
                 $computer = Get-ADComputer $SCCMServer -ErrorAction Stop
                 $sid = [System.Security.Principal.SecurityIdentifier] $computer.SID
                 $identity = [System.Security.Principal.IdentityReference] $SID
@@ -198,7 +202,7 @@ function Install-SCCM {
                 $inheritanceType = [System.DirectoryServices.ActiveDirectorySecurityInheritance] "All"
                 $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule $identity, $adRights, $type, $inheritanceType
                 $acl.AddAccessRule($ace)
-                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$domain,DC=com" -ErrorAction Stop -Passthru) {
+                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$script:domain,DC=com" -ErrorAction Stop -Passthru) {
                     Write-Host -ForegroundColor Green "SCCM System Management Container permissions set!"
                 }
                 else {
@@ -319,4 +323,29 @@ function Install-SCCM {
     end {
         Write-Host -ForegroundColor Green "SCCM install process - Finished!"
     }
+}
+
+function Test-SchemaExtension {
+    <#
+        .SYNOPSIS
+            Test for schema extension
+
+        .DESCRIPTION
+            Test to see if the schema has already been extended for SCCM
+
+        .EXAMPLE
+            c:\ PS> Test-SchemaExtension
+
+        .NOTES
+            Internal method
+    #>
+
+    [cmdletbinding()]
+    param()
+    
+    if (Test-path -Path "$env:SystemDrive\ExtADSch.log") {
+        $content = Get-Content -Path "$env:SystemDrive\ExtADSch.log"
+        foreach ($line in $content) { if ($line.contains("Successfully extended the Active Directory schema.")) { $true } }
+    }
+    else { $false }
 }
