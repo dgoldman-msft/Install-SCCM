@@ -73,7 +73,7 @@ function Install-SCCM {
 
     process {
         $script:parameters = $PSBoundParameters
-        $script:domain = $env:USERDOMAIN
+        $script:domain =  $env:USERDNSDOMAIN -split '\W'
         
         Write-Host -ForegroundColor Green "Logging started"
         Start-Transcript -Path $LoggingPath -Append -IncludeInvocationHeader
@@ -174,18 +174,18 @@ function Install-SCCM {
 
         try {
             Write-Host -ForegroundColor Green "Checking for SCCM System Management Container in the Active Directory"
-            Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$script:domain,DC=com"
+            Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$script:domain[0],DC=$script:domain[1]"
             Write-Host -ForegroundColor Green "SCCM System Management Container found!"
         }
         catch {
             try {
                 if ($PSCmdlet.ShouldProcess("SCCM System Management Container")) {
-                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$script:domain,DC=com" -Server $DomainContoller -PassThru -ErrorAction Stop 
+                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$script:domain[0],DC=$script:domain[1]" -Server $DomainController -PassThru -ErrorAction Stop 
                     Write-Host -ForegroundColor Green "SCCM System Management container created"
                 }
             }
             catch {
-                Write-Host -ForegroundColor Red "Failure: SCCM System Management container not created"
+                Write-Host -ForegroundColor Red "Failure: SCCM System Management container not created - $_"
                 return
             }
         }
@@ -193,7 +193,7 @@ function Install-SCCM {
         try {
             Write-Host -ForegroundColor Green "Setting SCCM System Management Container permissions"
             if ($PSCmdlet.ShouldProcess("Setting SCCM system mManagement container permissions")) {
-                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$script:domain,DC=com" -ErrorAction Stop
+                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$script:domain[0],$script:domain[1]" -ErrorAction Stop
                 $computer = Get-ADComputer $SCCMServer -ErrorAction Stop
                 $sid = [System.Security.Principal.SecurityIdentifier] $computer.SID
                 $identity = [System.Security.Principal.IdentityReference] $SID
@@ -202,7 +202,7 @@ function Install-SCCM {
                 $inheritanceType = [System.DirectoryServices.ActiveDirectorySecurityInheritance] "All"
                 $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule $identity, $adRights, $type, $inheritanceType
                 $acl.AddAccessRule($ace)
-                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$script:domain,DC=com" -ErrorAction Stop -Passthru) {
+                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$script:domain[0],DC=$script:domain[1]" -ErrorAction Stop -Passthru) {
                     Write-Host -ForegroundColor Green "SCCM System Management Container permissions set!"
                 }
                 else {
@@ -220,7 +220,7 @@ function Install-SCCM {
             Write-Host -ForegroundColor Green "Creating SCCM accounts and groups"
             
             if ($PSCmdlet.ShouldProcess("Creating new managed SCCM-SQLService account")) {
-                if (New-ADServiceAccount -Name 'SCCM-SQLService' -DNSHostName $DomainContoller -Enabled $True -PassThru) {
+                if (New-ADServiceAccount -Name 'SCCM-SQLService' -DNSHostName $DomainController -Enabled $True -PassThru) {
                     Write-Verbose "SCCM-SQLService created!" 
                 }
             }
@@ -345,7 +345,7 @@ function Test-SchemaExtension {
     
     if (Test-path -Path "$env:SystemDrive\ExtADSch.log") {
         $content = Get-Content -Path "$env:SystemDrive\ExtADSch.log"
-        foreach ($line in $content) { if ($line.contains("Successfully extended the Active Directory schema.")) { $true } }
+        foreach ($line in $content) { if ($line.contains("Successfully extended the Active Directory schema.")) { "$true" } }
     }
-    else { $false }
+    else { "$false" }
 }
