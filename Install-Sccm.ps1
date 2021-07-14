@@ -174,13 +174,13 @@ function Install-SCCM {
 
         try {
             Write-Host -ForegroundColor Green "Checking for SCCM System Management Container in the Active Directory"
-            Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$script:domain[0],DC=$script:domain[1]"
+            Get-ADObject -LDAPFilter "(objectClass=Container)" -SearchBase "CN=System Management,CN=System,DC=$($script:domain[0]),DC=$($script:domain[1])"
             Write-Host -ForegroundColor Green "SCCM System Management Container found!"
         }
         catch {
             try {
                 if ($PSCmdlet.ShouldProcess("SCCM System Management Container")) {
-                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$script:domain[0],DC=$script:domain[1]" -Server $DomainController -PassThru -ErrorAction Stop 
+                    New-ADObject -Name 'System Management' -Type 'Container' -Description 'SCCM System Management Container' -Path "CN=System,DC=$($script:domain[0]),DC=$($script:domain[1])" -Server $DomainController -PassThru -ErrorAction Stop 
                     Write-Host -ForegroundColor Green "SCCM System Management container created"
                 }
             }
@@ -193,7 +193,7 @@ function Install-SCCM {
         try {
             Write-Host -ForegroundColor Green "Setting SCCM System Management Container permissions"
             if ($PSCmdlet.ShouldProcess("Setting SCCM system mManagement container permissions")) {
-                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$script:domain[0],$script:domain[1]" -ErrorAction Stop
+                $acl = Get-Acl "AD:CN=System Management,CN=System,DC=$($script:domain[0]),$($script:domain[1])" -ErrorAction Stop
                 $computer = Get-ADComputer $SCCMServer -ErrorAction Stop
                 $sid = [System.Security.Principal.SecurityIdentifier] $computer.SID
                 $identity = [System.Security.Principal.IdentityReference] $SID
@@ -202,7 +202,7 @@ function Install-SCCM {
                 $inheritanceType = [System.DirectoryServices.ActiveDirectorySecurityInheritance] "All"
                 $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule $identity, $adRights, $type, $inheritanceType
                 $acl.AddAccessRule($ace)
-                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$script:domain[0],DC=$script:domain[1]" -ErrorAction Stop -Passthru) {
+                if (Set-Acl -AclObject $acl "AD:CN=System Management,CN=System,DC=$($script:domain[0]),DC=$($script:domain[1])" -ErrorAction Stop -Passthru) {
                     Write-Host -ForegroundColor Green "SCCM System Management Container permissions set!"
                 }
                 else {
